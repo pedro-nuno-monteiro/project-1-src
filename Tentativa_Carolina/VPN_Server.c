@@ -30,7 +30,7 @@ int main(void) {
     system("clear");
 #endif
 
-    // udo_sock setup
+    // udp_sock setup
     udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (udp_sock < 0) erro("Erro na criação do socket UDP");
 
@@ -43,13 +43,12 @@ int main(void) {
     if (bind(udp_sock, (struct sockaddr*)&udp_bind_addr, sizeof(udp_bind_addr)) < 0)
         erro("Erro no bind UDP");
 
-    // destination for UDP: ProgUDP2 on localhost:SERVER_UDP_PORT
     bzero(&prog_udp_2, sizeof(prog_udp_2));
     prog_udp_2.sin_family = AF_INET;
     prog_udp_2.sin_port   = htons(PROGUDP2_PORT);
     prog_udp_2.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    // ----- TCP listen socket -----
+    // tcp_sock setup
     int tcp_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (tcp_sock < 0){
         erro("na função socket TCP");
@@ -69,7 +68,6 @@ int main(void) {
 
     printf("VPN Server: waiting for TCP and UDP messages\n");
 
-    // ----- accept loop: one client at a time -----
     while(1) {
         struct sockaddr_in client_addr; 
         socklen_t client_addr_size = sizeof(client_addr);
@@ -80,11 +78,10 @@ int main(void) {
             continue; 
         }
 
-        process_client(client);   // handles both directions with select()
+        process_client(client);  
         close(client);
     }
 
-    // (unreachable in this minimal loop)
     close(tcp_sock);
     close(udp_sock);
     return 0;
@@ -110,6 +107,7 @@ void process_client(int client_fd) {
         // TCP -> UDP (to ProgUDP2)
         if (FD_ISSET(client_fd, &readfds)) {
             nread = read(client_fd, buffer, BUFLEN);
+            buffer[nread] = '\0';
             printf("Received: %s", buffer);
             if (nread <= 0) break;  // closed or error
             if (sendto(udp_sock, buffer, nread, 0,(struct sockaddr*)&prog_udp_2, sizeof(prog_udp_2)) == -1) {
@@ -123,6 +121,7 @@ void process_client(int client_fd) {
         if (FD_ISSET(udp_sock, &readfds)) {
             struct sockaddr_in from; socklen_t flen = sizeof(from);
             int n = recvfrom(udp_sock, buffer, BUFLEN, 0,(struct sockaddr*)&from, &flen);
+            buffer[n] = '\0';
             printf("Received: %s", buffer);
             if (n < 0) { 
                 perror("recvfrom UDP"); 
