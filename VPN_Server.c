@@ -6,167 +6,202 @@
 #include <stdio.h>
 #include <netdb.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <arpa/inet.h>
+#include <errno.h>
 
-#define SERVER_PORT       9000 // porto para recepção das mensagens TCP
-#define SERVER_UDP_PORT   9877 // porto para recepção das mensagens UDP 
-#define PROGUDP2_PORT     9878 // porto do ProgUDP2
-#define BUFLEN	          1024
+/*
+Sentido 1: ProgUDP1  ----UDP---->  VPN Client  ----TCP---->  VPN Server ----UDP---->  ProgUDP2
 
-struct sockaddr_in prog_udp_2; 
-int client_fd_global = -1;
+        - ProgUDP1 envia para VPN Client:   9876
+        - VPN Client envia para VPN Server 9000
+        - VPN Server envia para ProgUDP2:   9878
+
+Sentido 2: ProgUDP2  ----UDP---->  VPN Server  ----TCP---->  VPN Client ----UDP---->  ProgUDP1
+        - ProgUDP2 envia para VPN Server:   9877
+        - VPN Server envia para VPN Client: 9000
+        - VPN Client envia para ProgUDP1:   9875
+*/
+
+/* inicializações */
+
+#define SERVER_TCP_PORT   9001   // porto para recepção das mensagens TCP
+#define SERVER_UDP_PORT   9877   // porto para recepção das mensagens UDP 
+#define PROGUDP2_PORT     9878   // porto do ProgUDP2
+#define BUFLEN            1024
+
+// variaveis globais para o process client
 int udp_sock;
+struct sockaddr_in prog_udp_2;
 
-void process_client(int fd);
+void process_client(int client_fd);
 void erro(char *msg);
+void manager_menu();
+void clear_screen();
 
-int main() {
+int main(void) {
 
-  #ifdef _WIN32
+	clear_screen();
+
+	manager_menu();
+
+    // udp_sock setup
+    udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (udp_sock < 0) erro("Erro na criação do socket UDP");
+
+    struct sockaddr_in udp_bind_addr;
+    bzero(&udp_bind_addr, sizeof(udp_bind_addr));
+    udp_bind_addr.sin_family = AF_INET;
+    udp_bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    udp_bind_addr.sin_port = htons(SERVER_UDP_PORT);
+
+    if (bind(udp_sock, (struct sockaddr*)&udp_bind_addr, sizeof(udp_bind_addr)) < 0)
+        erro("Erro no bind UDP");
+
+    bzero(&prog_udp_2, sizeof(prog_udp_2));
+    prog_udp_2.sin_family = AF_INET;
+    prog_udp_2.sin_port   = htons(PROGUDP2_PORT);
+    prog_udp_2.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    // tcp_sock setup
+    int tcp_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_sock < 0){
+        erro("na função socket TCP");
+    }
+
+    struct sockaddr_in udp_server_addr;
+    bzero(&udp_server_addr, sizeof(udp_server_addr));
+    udp_server_addr.sin_family = AF_INET;
+    udp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    udp_server_addr.sin_port = htons(SERVER_TCP_PORT);
+
+    if (bind(tcp_sock, (struct sockaddr*)&udp_server_addr, sizeof(udp_server_addr)) < 0)
+        erro("na função bind TCP");
+    if (listen(tcp_sock, 1) < 0)
+        erro("na função listen TCP");
+
+    printf("VPN Server: waiting for TCP and UDP messages\n\n");
+
+    while(1) {
+        struct sockaddr_in client_addr; 
+        socklen_t client_addr_size = sizeof(client_addr);
+
+        int client = accept(tcp_sock, (struct sockaddr*)&client_addr, &client_addr_size);
+        if (client < 0) { 
+            perror("accept"); 
+            continue; 
+        }
+
+        process_client(client);  
+        close(client);
+    }
+
+    close(tcp_sock);
+    close(udp_sock);
+    return 0;
+}
+
+
+void process_client(int client_fd) {
+    int nread = 0;
+    char buffer[BUFLEN];
+
+    while(1) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(client_fd, &readfds);   // TCP from VPN client
+        FD_SET(udp_sock, &readfds);    // UDP from ProgUDP2
+        int maxfd = (client_fd > udp_sock ? client_fd : udp_sock) + 1;
+
+		// espera por dados TCP ou UDP
+        if (select(maxfd, &readfds, NULL, NULL, NULL) < 0) {
+            perror("select");
+            break;
+        }
+
+        // TCP -> UDP (to ProgUDP2)
+        if (FD_ISSET(client_fd, &readfds)) {
+            nread = read(client_fd, buffer, BUFLEN);
+            buffer[nread] = '\0';
+            printf("Received [VPN Client]: %s", buffer);
+            if (nread <= 0) 
+				break;  // closed or error
+
+			// enviar para ProgUDP2 via UDP
+            if (sendto(udp_sock, buffer, nread, 0,(struct sockaddr*)&prog_udp_2, sizeof(prog_udp_2)) == -1) {
+                perror("sendto UDP");
+                break;
+            }
+            
+        }
+
+        // UDP -> TCP (back to VPN client)
+        if (FD_ISSET(udp_sock, &readfds)) {
+            struct sockaddr_in from; 
+			socklen_t flen = sizeof(from);
+
+            int n = recvfrom(udp_sock, buffer, BUFLEN, 0,(struct sockaddr*)&from, &flen);
+            buffer[n] = '\0';
+            printf("Received [ProgUDP2]: %s", buffer);
+            if (n < 0) { 
+                perror("recvfrom UDP"); 
+                break; 
+            }
+            
+			// enviar de volta para o cliente VPN via TCP
+            if (write(client_fd, buffer, n) < 0) {
+                perror("write TCP"); 
+                break; 
+            }
+        }
+    }
+}
+
+void manager_menu() {
+
+	int opcao = 0;
+
+	printf("***************************************\n");
+	printf("        VPN Server Manager             \n");
+	printf(" 1. Utilizar encriptação por default   \n");
+	printf(" 2. Configurar métodos criptográficos  \n");
+	printf("***************************************\n\n");
+
+    printf("Selecione uma opção: ");
+    while (scanf("%d", &opcao) != 1 || opcao < 1 || opcao > 2) {
+        printf("Opção inválida. Tente novamente\n\nSelecione uma opção: ");
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF);
+        opcao = 0;
+    }
+
+	switch (opcao) {
+	case 1:
+		clear_screen();
+		printf("Encriptação por default ainda não está implementada.\n\n");
+		scanf("Pressione Enter para continuar."); 
+		break;
+	
+	case 2:
+		clear_screen();
+		printf("Configuração de métodos criptográficos ainda não está implementada.\n\n");
+		scanf("Pressione Enter para continuar."); 
+		break;
+	
+	default:
+		break;
+	}
+}
+
+void erro(char *msg) {
+    printf("Erro: %s\n", msg);
+    exit(-1);
+}
+
+void clear_screen() {
+	// limpar ecrã
+	#ifdef _WIN32
 		system("cls");
 	#else
 		system("clear");
 	#endif
-
-  // inicializações
-  int tcp_sock_id, client;
-
-  // socket
-  struct sockaddr_in vpn_client_tcp, client_addr;
-  socklen_t client_addr_size = sizeof(client_addr);
-  char buf[BUFLEN];
-
-  bzero((void *) &vpn_client_tcp, sizeof(vpn_client_tcp));
-  vpn_client_tcp.sin_family = AF_INET;
-  vpn_client_tcp.sin_addr.s_addr = htonl(INADDR_ANY);
-  vpn_client_tcp.sin_port = htons(SERVER_PORT);
-
-  // criar socket para conexão TCP com VPN Client
-  if ((tcp_sock_id = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-    erro("na funcao socket");
-  if(bind(tcp_sock_id, (struct sockaddr*)&vpn_client_tcp, sizeof(vpn_client_tcp)) == -1)
-    erro("na funcao bind");
-  if(listen(tcp_sock_id, 5) == -1)
-    erro("na funcao listen");
-
-  printf("VPN Server: waiting for TCP msg\n");
-
-  // udp socket
-  if ((udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
-		erro("Erro na criação do socket UDP");
-
-  struct sockaddr_in udp_server_addr;
-  bzero(&udp_server_addr, sizeof(udp_server_addr));
-  udp_server_addr.sin_family = AF_INET;
-  udp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  udp_server_addr.sin_port = htons(SERVER_UDP_PORT);
-
-  if(bind(udp_sock, (struct sockaddr*)&udp_server_addr, sizeof(udp_server_addr)) == -1)
-    erro("Erro no bind UDP");
-
-
-  printf("VPN Server: waiting for UDP msg\n");
-
-  bzero(&prog_udp_2, sizeof(prog_udp_2));
-  prog_udp_2.sin_family = AF_INET;
-  prog_udp_2.sin_port = htons(PROGUDP2_PORT);
-  prog_udp_2.sin_addr.s_addr = inet_addr("127.0.0.1"); // ProgUDP2 address
-
-
-  fd_set readfds;
-  int maxfd;
-  maxfd = (udp_sock > tcp_sock_id ? udp_sock : tcp_sock_id) + 1;
-
-  // Loop que espera por conexões TCP ou UDP
-  while (1) {
-  
-    //clean finished child processes, avoiding zombies
-    //must use WNOHANG or would block whenever a child process was working
-    while(waitpid(-1, NULL, WNOHANG) > 0);
-
-    FD_ZERO(&readfds);
-    FD_SET(udp_sock, &readfds);
-    FD_SET(tcp_sock_id, &readfds);
-
-    // verifica que tipo de mensagem é que recebeu
-    if (select(maxfd, &readfds, NULL, NULL, NULL) < 0)
-      erro("Erro no select");
-
-    // caso mensagem TCP
-    if (FD_ISSET(tcp_sock_id, &readfds)) {
-
-      // accept()
-      client = accept(tcp_sock_id, (struct sockaddr *)&client_addr,(socklen_t *)&client_addr_size);
-
-      if (client > 0) {
-        if (fork() == 0) {
-          client_fd_global = client;
-          close(tcp_sock_id);
-          process_client(client);
-          exit(0);
-        }
-        close(client);
-      }
-    }
-
-    // caso mensagem UDP
-    if (FD_ISSET(udp_sock, &readfds)) {
-      printf("aqui dentro\n");
-      struct sockaddr_in udp_sender;
-      socklen_t addr_size = sizeof(udp_sender);
-
-      int recv_len = recvfrom(udp_sock, buf, BUFLEN - 1, 0, (struct sockaddr *) &udp_sender, (socklen_t *)&addr_size);
-
-      if (recv_len > 0) {
-        buf[recv_len] = '\0';
-        printf("Received UDP message from %s:%d → %s\n", inet_ntoa(udp_sender.sin_addr), ntohs(udp_sender.sin_port), buf);
-
-      
-        if (client_fd_global != -1) {
-          write(client_fd_global, buf, recv_len);
-          printf("Forwarded UDP -> TCP to VPN Client.\n");
-        } else {
-          printf("No VPN Client connected. Discarding UDP message.\n");
-        }
-      }
-    }
-  }
-  close(tcp_sock_id);
-  close(udp_sock);
-  return 0;
-}
-
-void process_client(int client_fd) {
-
-
-	int nread = 0;
-	char buffer[BUFLEN];
-
-  printf("New client connected\n");
-
-  //client_fd_global = client_fd;
-
-  while (1) {
-
-    while ((nread = read(client_fd, buffer, BUFLEN - 1)) > 0) {
-      buffer[nread] = '\0';
-      printf("TCP from VPN Client: %s\n", buffer);
-
-      // Forward to ProgUDP2 via UDP
-      if (sendto(udp_sock, buffer, nread, 0,
-        (struct sockaddr *)&prog_udp_2, sizeof(prog_udp_2)) == -1) {
-        perror("sendto UDP to ProgUDP2");
-      } else {
-        printf("Forwarded TCP -> UDP to ProgUDP2.\n");
-      }
-    }
-  }
-  printf("VPN Client disconnected.\n");
-	close(client_fd);
-}
-
-void erro(char *msg) {
-	printf("Erro: %s\n", msg);
-	exit(-1);
 }
