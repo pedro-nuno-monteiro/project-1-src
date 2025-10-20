@@ -9,6 +9,21 @@
 #include <arpa/inet.h>
 #include <errno.h>
 
+
+/*
+
+Sentido 1: ProgUDP1  ----UDP---->  VPN Client  ----TCP---->  VPN Server ----UDP---->  ProgUDP2
+
+        - ProgUDP1 envia para VPN Client:9876
+        - VPN Client envia para VPN Server:9000
+        - VPN Server envia para ProgUDP2:9878
+
+Sentido 2: ProgUDP2  ----UDP---->  VPN Server  ----TCP---->  VPN Client ----UDP---->  ProgUDP1
+        - ProgUDP2 envia para VPN Server:9877
+        - VPN Server envia para VPN Client:9000
+        - VPN Client envia para ProgUDP1:9875
+*/
+
 /* inicializações */
 
 #define SERVER_TCP_PORT   9000   // porto para recepção das mensagens TCP
@@ -141,3 +156,4 @@ void erro(char *msg) {
     printf("Erro: %s\n", msg);
     exit(-1);
 }
+
