@@ -8,6 +8,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <math.h>
 
 /*
 Sentido 1: ProgUDP1  ----UDP---->  VPN Client  ----TCP---->  VPN Server ----UDP---->  ProgUDP2
@@ -24,10 +25,22 @@ Sentido 2: ProgUDP2  ----UDP---->  VPN Server  ----TCP---->  VPN Client ----UDP-
 
 /* inicializações */
 
-#define SERVER_TCP_PORT   9001   // porto para recepção das mensagens TCP
+#define SERVER_TCP_PORT   9000   // porto para recepção das mensagens TCP
 #define SERVER_UDP_PORT   9877   // porto para recepção das mensagens UDP 
 #define PROGUDP2_PORT     9878   // porto do ProgUDP2
 #define BUFLEN            1024
+
+struct DH_parameters {
+    // valores públicos
+    int p, g;
+
+    // valores secretos
+    int b;
+    
+    int A, B;
+
+    int key;
+};
 
 // variaveis globais para o process client
 int udp_sock;
@@ -35,14 +48,16 @@ struct sockaddr_in prog_udp_2;
 
 void process_client(int client_fd);
 void erro(char *msg);
-void manager_menu();
+int manager_menu();
 void clear_screen();
+void dh_calcula_key(struct DH_parameters *dh);
+void caesar_crypt(char *message, int key, int flag);
 
 int main(void) {
 
 	clear_screen();
 
-	manager_menu();
+	int opcao = manager_menu();
 
     // udp_sock setup
     udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -79,8 +94,6 @@ int main(void) {
     if (listen(tcp_sock, 1) < 0)
         erro("na função listen TCP");
 
-    printf("VPN Server: waiting for TCP and UDP messages\n\n");
-
     while(1) {
         struct sockaddr_in client_addr; 
         socklen_t client_addr_size = sizeof(client_addr);
@@ -100,10 +113,41 @@ int main(void) {
     return 0;
 }
 
-
 void process_client(int client_fd) {
     int nread = 0;
     char buffer[BUFLEN];
+    int first_time = 1;
+
+    struct DH_parameters dh;
+    if (first_time) {
+        // --- protocolo Diffie-Hellman ---
+        dh.p = 23;
+        dh.g = 5;
+        dh.b = 9;
+
+        // cálculo de B
+        dh.B = (int)pow(dh.g, dh.b) % dh.p;
+
+        // envio de B para o VPN Client
+        printf("Default process\n");
+        // recebe A do VPN Client
+        if (read(client_fd, &dh.A, sizeof(dh.A)) == -1) {
+            erro("Erro ao receber A");
+        }
+        printf("Received A = %d from VPN Server\n", dh.A);
+
+        printf("Sending B = %d to VPN Client\n", dh.B);
+        if (write(client_fd, &dh.B, sizeof(dh.B)) == -1) {
+            erro("Erro no envio de B");
+        }
+
+        // calcula chave secreta S
+        dh_calcula_key(&dh);
+
+        printf("VPN Server: waiting for TCP and UDP messages\n\n");
+        
+        first_time = 0;
+    }
 
     while(1) {
         fd_set readfds;
@@ -126,6 +170,9 @@ void process_client(int client_fd) {
             if (nread <= 0) 
 				break;  // closed or error
 
+            // desencriptar mensagem
+            caesar_crypt(buffer, dh.key, 0);
+
 			// enviar para ProgUDP2 via UDP
             if (sendto(udp_sock, buffer, nread, 0,(struct sockaddr*)&prog_udp_2, sizeof(prog_udp_2)) == -1) {
                 perror("sendto UDP");
@@ -146,6 +193,9 @@ void process_client(int client_fd) {
                 perror("recvfrom UDP"); 
                 break; 
             }
+
+            // encriptar mensagem
+            caesar_crypt(buffer, dh.key, 1);
             
 			// enviar de volta para o cliente VPN via TCP
             if (write(client_fd, buffer, n) < 0) {
@@ -156,7 +206,7 @@ void process_client(int client_fd) {
     }
 }
 
-void manager_menu() {
+int manager_menu() {
 
 	int opcao = 0;
 
@@ -175,21 +225,23 @@ void manager_menu() {
     }
 
 	switch (opcao) {
-	case 1:
-		clear_screen();
-		printf("Encriptação por default ainda não está implementada.\n\n");
-		scanf("Pressione Enter para continuar."); 
-		break;
-	
-	case 2:
-		clear_screen();
-		printf("Configuração de métodos criptográficos ainda não está implementada.\n\n");
-		scanf("Pressione Enter para continuar."); 
-		break;
-	
-	default:
-		break;
+        case 1:
+            clear_screen();
+            printf("Selecionou a Encriptação por default.\n");
+            scanf("Pressione Enter para continuar."); 
+            break;
+        
+        case 2:
+            clear_screen();
+            printf("Configuração de métodos criptográficos ainda não está implementada.\n\n");
+            scanf("Pressione Enter para continuar."); 
+            break;
+        
+        default:
+            break;
 	}
+
+    return opcao;
 }
 
 void erro(char *msg) {
@@ -204,4 +256,31 @@ void clear_screen() {
 	#else
 		system("clear");
 	#endif
+}
+
+void dh_calcula_key(struct DH_parameters *dh) {
+    // key = B^a mod p
+    dh->key = (int)pow(dh->A, dh->b) % dh->p;
+
+    printf("Chave secreta, K = %d\n\n", dh->key);
+    return;
+}
+
+void caesar_crypt(char *message, int key, int flag) {
+
+    if (flag) {
+        //encriptar
+        for(int i = 0; message[i] != '\0'; i++) {
+            message[i] = (message[i] + key) % 256;
+        }
+
+    } else {
+        //desencriptar
+        for(int i = 0; message[i] != '\0'; i++) {
+            message[i] = (message[i] - key + 256) % 256;
+        }
+    }
+
+    printf("\nAfter %scryption: %s\n", flag ? "en" : "de", message);
+
 }

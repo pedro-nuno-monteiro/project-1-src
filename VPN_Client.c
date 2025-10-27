@@ -9,21 +9,32 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
+#include <math.h>
 
 #define BUFLEN                1024
 #define UDP1_PORT             9875   // porto fixo do Prog_UDP1 (bind)
 #define VPN_CLIENT_UDP_PORT   9876   // porto deste cliente VPN (bind)
 
+struct DH_parameters {
+    // valores públicos
+    int p, g;
+
+    // valores secretos
+    int a;
+    
+    int A, B;
+
+    int key;
+};
+
 void erro(char *msg);
+void clear_screen();
+void dh_calcula_key(struct DH_parameters *dh);
+void caesar_crypt(char *message, int key, int flag);
 
 int main(int argc, char *argv[]) {
 
-    // limpar ecrã
-    #ifdef _WIN32
-        system("cls");
-    #else
-        system("clear");
-    #endif
+    clear_screen();
 
     if (argc != 3) {
         printf("cliente <host> <port>\n");
@@ -79,6 +90,33 @@ int main(int argc, char *argv[]) {
     fd_set readfds;
     int maxfd = (udp_sock > tcp_sock ? udp_sock : tcp_sock) + 1;
 
+    // --- protocolo Diffie-Hellman ---
+    struct DH_parameters dh;
+    dh.p = 23;
+    dh.g = 5;
+    dh.a = 6;
+
+    // cálculo de A
+    dh.A = (int)pow(dh.g, dh.a) % dh.p;
+
+    // envio de A para o VPN Server
+    printf("Default process\n");
+    printf("Sending A = %d to VPN Server\n", dh.A);
+    if (write(tcp_sock, &dh.A, sizeof(dh.A)) == -1) {
+        erro("Erro no envio de A");
+    }
+
+    // recebe B do VPN Server
+    if (read(tcp_sock, &dh.B, sizeof(dh.B)) == -1) {
+        erro("Erro ao receber B");
+    }
+    printf("Received B = %d from VPN Server\n", dh.B);
+
+    // calcula chave secreta S
+    dh_calcula_key(&dh);
+
+    clear_screen();
+
     printf("VPN Client: waiting for TCP and UDP messages\n\n");
 
     while(1) {
@@ -106,6 +144,9 @@ int main(int argc, char *argv[]) {
 
             printf("Received [ProgUDP1]: %s", buf);
             
+            // encriptar mensagem
+            caesar_crypt(buf, dh.key, 1);
+            
             // enviar para VPN Server via TCP
             if (write(tcp_sock, buf, recv_len) == -1) {
                 erro("Write to VPN Server");
@@ -123,6 +164,9 @@ int main(int argc, char *argv[]) {
             buf[recv_len] = '\0';
             printf("Received [VPN Server]: %s", buf);
 
+            // desencriptar mensagem
+            caesar_crypt(buf, dh.key, 0);
+
             // reenviar para ProgUDP1 via UDP
             if (sendto(udp_sock, buf, recv_len, 0, (struct sockaddr *)&udp1_fixed, sizeof(udp1_fixed)) == -1) {
                 erro("sendto UDP1");
@@ -138,4 +182,42 @@ int main(int argc, char *argv[]) {
 void erro(char *msg) {
     printf("Erro: %s\n", msg);
     exit(-1);
+}
+
+void clear_screen() {
+	// limpar ecrã
+	#ifdef _WIN32
+		system("cls");
+	#else
+		system("clear");
+	#endif
+}
+
+void dh_calcula_key(struct DH_parameters *dh) {
+    // key = B^a mod p
+    dh->key = (int)pow(dh->B, dh->a) % dh->p;
+
+    printf("Chave secreta, K = %d\n\n", dh->key);
+    printf("Press Enter para continuar!");
+    getchar();
+    return;
+}
+
+void caesar_crypt(char *message, int key, int flag) {
+
+    if (flag) {
+        //encriptar
+        for(int i = 0; message[i] != '\0'; i++) {
+            message[i] = (message[i] + key) % 256;
+        }
+
+    } else {
+        //desencriptar
+        for(int i = 0; message[i] != '\0'; i++) {
+            message[i] = (message[i] - key + 256) % 256;
+        }
+    }
+
+    printf("\nAfter %scryption: %s\n", flag ? "en" : "de", message);
+
 }
