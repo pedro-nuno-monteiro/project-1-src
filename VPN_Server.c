@@ -25,7 +25,7 @@ Sentido 2: ProgUDP2  ----UDP---->  VPN Server  ----TCP---->  VPN Client ----UDP-
 
 /* inicializações */
 
-#define SERVER_TCP_PORT   9000   // porto para recepção das mensagens TCP
+#define SERVER_TCP_PORT   9000     // porto para recepção das mensagens TCP
 #define SERVER_UDP_PORT   9877   // porto para recepção das mensagens UDP 
 #define PROGUDP2_PORT     9878   // porto do ProgUDP2
 #define BUFLEN            1024
@@ -42,22 +42,29 @@ struct DH_parameters {
     int key;
 };
 
+struct Packet {
+    char message[BUFLEN];
+    unsigned int hash_value;
+};
+
 // variaveis globais para o process client
 int udp_sock;
 struct sockaddr_in prog_udp_2;
 
-void process_client(int client_fd);
+void process_client(int client_fd, int metodo);
 void erro(char *msg);
 int manager_menu();
 void clear_screen();
 void dh_calcula_key(struct DH_parameters *dh);
-void caesar_crypt(char *message, int key, int flag);
+void criptar(char *message, int key, int encriptar, int metodo);
+unsigned int hash(const char * message);
 
 int main(void) {
 
 	clear_screen();
 
-	int opcao = manager_menu();
+    // depois o método virá do manager
+	int metodo = manager_menu();
 
     // udp_sock setup
     udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -100,11 +107,11 @@ int main(void) {
 
         int client = accept(tcp_sock, (struct sockaddr*)&client_addr, &client_addr_size);
         if (client < 0) { 
-            perror("accept"); 
+            erro("accept"); 
             continue; 
         }
 
-        process_client(client);  
+        process_client(client, metodo);  
         close(client);
     }
 
@@ -113,42 +120,37 @@ int main(void) {
     return 0;
 }
 
-void process_client(int client_fd) {
+void process_client(int client_fd, int metodo) {
     int nread = 0;
     char buffer[BUFLEN];
-    int first_time = 1;
 
     struct DH_parameters dh;
-    if (first_time) {
-        // --- protocolo Diffie-Hellman ---
-        dh.p = 23;
-        dh.g = 5;
-        dh.b = 9;
+    // --- protocolo Diffie-Hellman ---
+    dh.p = 23;
+    dh.g = 5;
+    dh.b = 9;
 
-        // cálculo de B
-        dh.B = (int)pow(dh.g, dh.b) % dh.p;
+    // cálculo de B
+    dh.B = (int)pow(dh.g, dh.b) % dh.p;
 
-        // envio de B para o VPN Client
-        printf("Default process\n");
-        // recebe A do VPN Client
-        if (read(client_fd, &dh.A, sizeof(dh.A)) == -1) {
-            erro("Erro ao receber A");
-        }
-        printf("Received A = %d from VPN Server\n", dh.A);
+    // envio de B para o VPN Client
+    printf("Default process\n");
+    // recebe A do VPN Client
+    if (read(client_fd, &dh.A, sizeof(dh.A)) == -1) {
+        erro("Erro ao receber A");
+    }
+    printf("Received A = %d from VPN Server\n", dh.A);
 
-        printf("Sending B = %d to VPN Client\n", dh.B);
-        if (write(client_fd, &dh.B, sizeof(dh.B)) == -1) {
-            erro("Erro no envio de B");
-        }
-
-        // calcula chave secreta S
-        dh_calcula_key(&dh);
-
-        printf("VPN Server: waiting for TCP and UDP messages\n\n");
-        
-        first_time = 0;
+    printf("Sending B = %d to VPN Client\n", dh.B);
+    if (write(client_fd, &dh.B, sizeof(dh.B)) == -1) {
+        erro("Erro no envio de B");
     }
 
+    // calcula chave secreta S
+    dh_calcula_key(&dh);
+
+    printf("VPN Server: waiting for TCP and UDP messages\n\n");
+    
     while(1) {
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -158,24 +160,39 @@ void process_client(int client_fd) {
 
 		// espera por dados TCP ou UDP
         if (select(maxfd, &readfds, NULL, NULL, NULL) < 0) {
-            perror("select");
+            erro("select");
             break;
         }
 
         // TCP -> UDP (to ProgUDP2)
         if (FD_ISSET(client_fd, &readfds)) {
-            nread = read(client_fd, buffer, BUFLEN);
-            buffer[nread] = '\0';
-            printf("Received [VPN Client]: %s", buffer);
+
+            struct Packet p;
+
+            nread = read(client_fd, &p, sizeof(p));
             if (nread <= 0) 
 				break;  // closed or error
+            
+            strncpy(buffer, p.message, BUFLEN - 1);
+            buffer[BUFLEN - 1] = '\0';
+            unsigned int received_hash = p.hash_value;
 
-            // desencriptar mensagem
-            caesar_crypt(buffer, dh.key, 0);
+            printf("\nReceived [VPN Client]: %s", buffer);
+
+            // desencriptar mensagem + calcular hash
+            unsigned int hash_value = hash(buffer);
+            criptar(buffer, dh.key, 0, metodo);
+
+            // verificar integridade
+            if (hash_value != received_hash) {
+                erro("Hash diferentes! Mensagem corrompida\n");
+            } else {
+                printf("Hash iguais! Mensagem íntegra.\n");
+            }
 
 			// enviar para ProgUDP2 via UDP
             if (sendto(udp_sock, buffer, nread, 0,(struct sockaddr*)&prog_udp_2, sizeof(prog_udp_2)) == -1) {
-                perror("sendto UDP");
+                erro("sendto UDP");
                 break;
             }
             
@@ -183,23 +200,31 @@ void process_client(int client_fd) {
 
         // UDP -> TCP (back to VPN client)
         if (FD_ISSET(udp_sock, &readfds)) {
+
             struct sockaddr_in from; 
 			socklen_t flen = sizeof(from);
 
             int n = recvfrom(udp_sock, buffer, BUFLEN, 0,(struct sockaddr*)&from, &flen);
-            buffer[n] = '\0';
-            printf("Received [ProgUDP2]: %s", buffer);
             if (n < 0) { 
-                perror("recvfrom UDP"); 
+                erro("recvfrom UDP"); 
                 break; 
             }
 
-            // encriptar mensagem
-            caesar_crypt(buffer, dh.key, 1);
-            
+            buffer[n] = '\0';
+
+            printf("\nReceived [ProgUDP2]: %s", buffer);
+
+            struct Packet pp;
+            // encriptar mensagem + calcular hash
+            criptar(buffer, dh.key, 1, metodo);
+            unsigned int hash_value = hash(buffer);
+
+            pp.hash_value = hash_value;
+            strcpy(pp.message, buffer);
+
 			// enviar de volta para o cliente VPN via TCP
-            if (write(client_fd, buffer, n) < 0) {
-                perror("write TCP"); 
+            if (write(client_fd, &pp, sizeof(pp)) < 0) {
+                erro("write TCP"); 
                 break; 
             }
         }
@@ -224,24 +249,34 @@ int manager_menu() {
         opcao = 0;
     }
 
+    int metodo = 1;
 	switch (opcao) {
         case 1:
             clear_screen();
-            printf("Selecionou a Encriptação por default.\n");
+            printf("Selecionou a encriptação por default = Generalised Caesar Cipher.\n");
             scanf("Pressione Enter para continuar."); 
             break;
         
         case 2:
             clear_screen();
-            printf("Configuração de métodos criptográficos ainda não está implementada.\n\n");
-            scanf("Pressione Enter para continuar."); 
+            metodo = 0;
+            printf("Selecione o método criptográfico:\n");
+            printf("1. Generalised Caesar Cipher (default)\n");
+            printf("2. Vigenère cypher\n");
+            printf("Opção: ");
+            while (scanf(" %d", &metodo) != 1 || metodo < 1 || metodo > 2) {
+                printf("Opção inválida. Tente novamente\n\nSelecione uma opção: ");
+                int d;
+                while ((d = getchar()) != '\n' && d != EOF);
+                metodo = 0;
+            }
             break;
-        
+            
         default:
             break;
 	}
-
-    return opcao;
+    clear_screen();
+    return metodo;  
 }
 
 void erro(char *msg) {
@@ -266,21 +301,58 @@ void dh_calcula_key(struct DH_parameters *dh) {
     return;
 }
 
-void caesar_crypt(char *message, int key, int flag) {
+void criptar(char *message, int key, int encriptar, int metodo) {
 
-    if (flag) {
-        //encriptar
-        for(int i = 0; message[i] != '\0'; i++) {
-            message[i] = (message[i] + key) % 256;
+    switch (metodo) {
+    case 1:
+        // Generalised Caesar Cipher
+        if (encriptar) {
+            //encriptar
+            for(int i = 0; message[i] != '\0'; i++) {
+                message[i] = (message[i] + key) % 256;
+            }
+
+        } else {
+            //desencriptar
+            for(int i = 0; message[i] != '\0'; i++) {
+                message[i] = (message[i] - key + 256) % 256;
+            }
+        }
+        break;
+    
+    case 2:
+
+        // Vigenère cypher
+        // gerar key_str a partir de key
+        char key_str[32];
+        unsigned int seed = key;
+        for(int i = 0; i < sizeof(key_str); i++) {
+            seed = (214013 * seed + 2531011);
+            key_str[i] = (seed >> 16) & 0xFF;
         }
 
-    } else {
-        //desencriptar
         for(int i = 0; message[i] != '\0'; i++) {
-            message[i] = (message[i] - key + 256) % 256;
+            if (encriptar) {
+                //encriptar
+                message[i] = (message[i] + key_str[i % sizeof(key_str)]) % 256;
+            } else {
+                //desencriptar
+                message[i] = (message[i] - key_str[i % sizeof(key_str)] + 256) % 256;
+            }
         }
     }
 
-    printf("\nAfter %scryption: %s\n", flag ? "en" : "de", message);
+    printf("After %scryption: %s\n", encriptar ? "en" : "de", message);
 
+}
+
+unsigned int hash(const char * message) {
+    unsigned int hash_value = 0;
+    const unsigned char * msg = (const unsigned char *)message;
+    while (* msg) {
+        hash_value = (hash_value * 31) + * msg;
+        msg++;
+    }
+    printf("Hash value: %u\n", hash_value);
+    return hash_value;
 }
