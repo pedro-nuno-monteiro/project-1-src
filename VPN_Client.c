@@ -27,6 +27,8 @@ struct DH_parameters {
     int key;
 };
 
+int metodo_global = 1; // default method
+
 struct Packet {
     char message[BUFLEN];
     unsigned int hash_value;
@@ -125,14 +127,15 @@ int main(int argc, char *argv[]) {
 
     printf("VPN Client: waiting for TCP and UDP messages\n\n");
 
-    // assumir método = 2
-    int metodo = 1;
+
 
     while(1) {
 
         FD_ZERO(&readfds);
         FD_SET(udp_sock, &readfds); // de ProgUDP1 para cá (UDP)
         FD_SET(tcp_sock, &readfds); // do VPN Server para cá (TCP)
+
+        int metodo = metodo_global;
 
         // verifica que tipo de mensagem é que recebeu
         if (select(maxfd, &readfds, NULL, NULL, NULL) < 0)
@@ -150,20 +153,35 @@ int main(int argc, char *argv[]) {
             }
             
             buf[recv_len] = '\0';
-            
-            printf("\nReceived [ProgUDP1]: %s", buf);
-            
-            struct Packet p;
-            // encriptar mensagem + calcular hash
-            criptar(buf, dh.key, 1, metodo);
-            unsigned int hash_value = hash(buf);
 
-            strcpy(p.message, buf);
-            p.hash_value = hash_value;
+            if (strncmp(buf, "METODO: ", 8) == 0) {
+                int metodo_recebido = atoi(buf + 8);
+                if (metodo_recebido == 1 || metodo_recebido == 2) {
+                    metodo_global = metodo_recebido;
+                    printf("\nMétodo atualizado via manager: METODO=%d\n", metodo_global);
+                } else {
+                    printf("\nMETODO invalido: %s\n", buf);
+                }
+                continue;
+            }
 
-            // enviar para VPN Server via TCP
-            if (write(tcp_sock, &p, sizeof(p)) == -1) {
-                erro("Write to VPN Server");
+            else{
+            
+                printf("\nReceived [ProgUDP1]: %s", buf);
+                printf("Using method: %d\n", metodo);
+                
+                struct Packet p;
+                // encriptar mensagem + calcular hash
+                criptar(buf, dh.key, 1, metodo);
+                unsigned int hash_value = hash(buf);
+
+                strcpy(p.message, buf);
+                p.hash_value = hash_value;
+
+                // enviar para VPN Server via TCP
+                if (write(tcp_sock, &p, sizeof(p)) == -1) {
+                    erro("Write to VPN Server");
+                }
             }
         }
 
@@ -180,7 +198,7 @@ int main(int argc, char *argv[]) {
             strncpy(buf, pp.message, BUFLEN - 1);
             buf[BUFLEN - 1] = '\0';
 
-            printf("\nReceived [VPN Server]: %s", buf);
+            printf("\nReceived [VPN Server]: %s\n", buf);
 
             // desencriptar mensagem + calcular hash
             unsigned int hash_value = hash(buf);

@@ -25,7 +25,7 @@ Sentido 2: ProgUDP2  ----UDP---->  VPN Server  ----TCP---->  VPN Client ----UDP-
 
 /* inicializações */
 
-#define SERVER_TCP_PORT   9000     // porto para recepção das mensagens TCP
+#define SERVER_TCP_PORT   9001     // porto para recepção das mensagens TCP
 #define SERVER_UDP_PORT   9877   // porto para recepção das mensagens UDP 
 #define PROGUDP2_PORT     9878   // porto do ProgUDP2
 #define BUFLEN            1024
@@ -50,8 +50,9 @@ struct Packet {
 // variaveis globais para o process client
 int udp_sock;
 struct sockaddr_in prog_udp_2;
+int metodo_global = 1; // default method
 
-void process_client(int client_fd, int metodo);
+void process_client(int client_fd);
 void erro(char *msg);
 int manager_menu();
 void clear_screen();
@@ -61,10 +62,13 @@ unsigned int hash(const char * message);
 
 int main(void) {
 
+    //int metodo = 1; // default method
+    // se nao receber nenhuma mensagem do manager, usa o default
+
 	clear_screen();
 
     // depois o método virá do manager
-	int metodo = manager_menu();
+	//int metodo = manager_menu();
 
     // udp_sock setup
     udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -111,7 +115,7 @@ int main(void) {
             continue; 
         }
 
-        process_client(client, metodo);  
+        process_client(client);  
         close(client);
     }
 
@@ -120,7 +124,7 @@ int main(void) {
     return 0;
 }
 
-void process_client(int client_fd, int metodo) {
+void process_client(int client_fd) {
     int nread = 0;
     char buffer[BUFLEN];
 
@@ -177,7 +181,11 @@ void process_client(int client_fd, int metodo) {
             buffer[BUFLEN - 1] = '\0';
             unsigned int received_hash = p.hash_value;
 
-            printf("\nReceived [VPN Client]: %s", buffer);
+            printf("\nReceived [VPN Client]: %s\n", buffer);
+
+            int metodo = metodo_global;
+
+            printf("Using method: %d\n", metodo);
 
             // desencriptar mensagem + calcular hash
             unsigned int hash_value = hash(buffer);
@@ -212,21 +220,38 @@ void process_client(int client_fd, int metodo) {
 
             buffer[n] = '\0';
 
-            printf("\nReceived [ProgUDP2]: %s", buffer);
-
-            struct Packet pp;
-            // encriptar mensagem + calcular hash
-            criptar(buffer, dh.key, 1, metodo);
-            unsigned int hash_value = hash(buffer);
-
-            pp.hash_value = hash_value;
-            strcpy(pp.message, buffer);
-
-			// enviar de volta para o cliente VPN via TCP
-            if (write(client_fd, &pp, sizeof(pp)) < 0) {
-                erro("write TCP"); 
-                break; 
+            if (strncmp(buffer, "METODO: ", 8) == 0) {
+                int metodo_enviado = atoi(buffer + 8);
+                if (metodo_enviado == 1 || metodo_enviado == 2) {
+                    metodo_global = metodo_enviado;
+                    printf("\nMétodo atualizado via manager: METODO= %d\n", metodo_global);
+                } else {
+                    printf("\n[SERVER] METODO invalido: %s\n", buffer);
+                }
+                continue;
             }
+
+            else{
+
+                printf("\nReceived [ProgUDP2]: %s", buffer);
+
+                int metodo = metodo_global;
+                printf("Using method: %d\n", metodo);
+
+                struct Packet pp;
+                // encriptar mensagem + calcular hash
+                criptar(buffer, dh.key, 1, metodo);
+                unsigned int hash_value = hash(buffer);
+
+                pp.hash_value = hash_value;
+                strcpy(pp.message, buffer);
+
+                // enviar de volta para o cliente VPN via TCP
+                if (write(client_fd, &pp, sizeof(pp)) < 0) {
+                    erro("write TCP"); 
+                    break; 
+                }
+        }
         }
     }
 }
