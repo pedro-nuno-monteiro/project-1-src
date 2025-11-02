@@ -47,10 +47,10 @@ struct Packet {
     unsigned int hash_value;
 };
 
-// variaveis globais para o process client
+// variáveis globais para o process client
 int udp_sock;
 struct sockaddr_in prog_udp_2;
-int metodo_global = 1; // default method
+int metodo_global = 1; // método default
 
 void process_client(int client_fd);
 void erro(char *msg);
@@ -62,13 +62,7 @@ unsigned int hash(const char * message);
 
 int main(void) {
 
-    //int metodo = 1; // default method
-    // se nao receber nenhuma mensagem do manager, usa o default
-
 	clear_screen();
-
-    // depois o método virá do manager
-	//int metodo = manager_menu();
 
     // udp_sock setup
     udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -128,8 +122,8 @@ void process_client(int client_fd) {
     int nread = 0;
     char buffer[BUFLEN];
 
-    struct DH_parameters dh;
     // --- protocolo Diffie-Hellman ---
+    struct DH_parameters dh;
     dh.p = 23;
     dh.g = 5;
     dh.b = 9;
@@ -137,7 +131,6 @@ void process_client(int client_fd) {
     // cálculo de B
     dh.B = (int)pow(dh.g, dh.b) % dh.p;
 
-    // envio de B para o VPN Client
     printf("Default process\n");
     // recebe A do VPN Client
     if (read(client_fd, &dh.A, sizeof(dh.A)) == -1) {
@@ -145,6 +138,7 @@ void process_client(int client_fd) {
     }
     printf("Received A = %d from VPN Server\n", dh.A);
 
+    // envio de B para o VPN Client
     printf("Sending B = %d to VPN Client\n", dh.B);
     if (write(client_fd, &dh.B, sizeof(dh.B)) == -1) {
         erro("Erro no envio de B");
@@ -153,7 +147,7 @@ void process_client(int client_fd) {
     // calcula chave secreta S
     dh_calcula_key(&dh);
 
-    printf("VPN Server: waiting for TCP and UDP messages\n\n");
+    printf("VPN Server ready: waiting for TCP and UDP messages\n\n");
     
     while(1) {
         fd_set readfds;
@@ -185,9 +179,12 @@ void process_client(int client_fd) {
 
             int metodo = metodo_global;
 
-            printf("Using method: %d\n", metodo);
+            if (metodo == 1)
+                printf("A utilizar método Generalised Caesar Cipher\n");
+            else if (metodo == 2)
+                printf("A utilizar método Vigenère cypher\n");
 
-            // desencriptar mensagem + calcular hash
+            // calcular hash + desencriptar mensagem
             unsigned int hash_value = hash(buffer);
             criptar(buffer, dh.key, 0, metodo);
 
@@ -220,23 +217,27 @@ void process_client(int client_fd) {
 
             buffer[n] = '\0';
 
-            if (strncmp(buffer, "METODO: ", 8) == 0) {
+            if (strncmp(buffer, "Method: ", 8) == 0) {
                 int metodo_enviado = atoi(buffer + 8);
                 if (metodo_enviado == 1 || metodo_enviado == 2) {
                     metodo_global = metodo_enviado;
-                    printf("\nMétodo atualizado via manager: METODO= %d\n", metodo_global);
+                    printf("\n[Via Manager] Método atualizado: Método = %d\n", metodo_global);
                 } else {
-                    printf("\n[SERVER] METODO invalido: %s\n", buffer);
+                    printf("\n[SERVER] Método inválido: %s\n", buffer);
                 }
                 continue;
             }
 
-            else{
+            else {
 
                 printf("\nReceived [ProgUDP2]: %s", buffer);
 
                 int metodo = metodo_global;
-                printf("Using method: %d\n", metodo);
+
+                if (metodo == 1)
+                    printf("A utilizar método Generalised Caesar Cipher\n");
+                else if (metodo == 2)
+                    printf("A utilizar método Vigenère cypher\n");
 
                 struct Packet pp;
                 // encriptar mensagem + calcular hash
@@ -251,7 +252,7 @@ void process_client(int client_fd) {
                     erro("write TCP"); 
                     break; 
                 }
-        }
+            }
         }
     }
 }

@@ -16,8 +16,7 @@ int manager_menu();
 static void clear_screen(void);
 void erro(char *msg);
 
-
-int main(){
+int main() {
 
     clear_screen();
 
@@ -30,13 +29,13 @@ int main(){
 
     struct sockaddr_in vpn_client, vpn_server;
 
-    // criar ligação com vpn_client
+    // criar ligação com VPN_Client
     memset(&vpn_client, 0, sizeof(vpn_client));
     vpn_client.sin_family = AF_INET;
     vpn_client.sin_addr.s_addr = inet_addr("127.0.0.1");
     vpn_client.sin_port = htons(VPN_CLIENT_UDP_PORT);
 
-    // criar ligação com vpn_server
+    // criar ligação com VPN_Server
     memset(&vpn_server, 0, sizeof(vpn_server));
     vpn_server.sin_family = AF_INET;
     vpn_server.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -44,34 +43,29 @@ int main(){
 
     int opcao;
 
-    while(1){
+    while(1) {
 
         opcao = manager_menu();
 
         char msg[BUFLEN];
 
         // criar mensagem para enviar
-        snprintf(msg, BUFLEN, "METODO: %d\n", opcao);
+        snprintf(msg, BUFLEN, "Method: %d\n", opcao);
 
         clear_screen();
 
         ssize_t msg_vpn_client = sendto(udpsock, msg, (int)strlen(msg), 0, (struct sockaddr*)&vpn_client, sizeof(vpn_client));
 
-        if (msg_vpn_client < 0){
+        if (msg_vpn_client < 0)
             erro("Não foi possível enviar para o vpn_client");
-        }
-
-        else {
-            printf("Enviado ao VPN_Client : %s", msg);
-        }
+        else
+            printf("Enviado ao VPN Client %s", msg);
 
         ssize_t msg_vpn_server = sendto(udpsock, msg, (int)strlen(msg), 0, (struct sockaddr*)&vpn_server, sizeof(vpn_server));
-        if (msg_vpn_server < 0) {
+        if (msg_vpn_server < 0)
             erro("Não foi possível enviar para o vpn_server");
-        }
-        else {
-            printf("Enviado ao VPN_Server : %s", msg);
-        }
+        else
+            printf("Enviado ao VPN Server %s\n\n", msg);
 
     }
 
@@ -84,9 +78,9 @@ int manager_menu() {
 	int opcao = 0;
 
 	printf("***************************************\n");
-	printf("            VPN Server Manager         \n");
-	printf(" 1. Generalised Caesar Cipher          \n");
-	printf(" 2. Vigenère cypher                    \n");
+	printf("        VPN Server Manager             \n");
+	printf(" 1. Utilizar encriptação por default   \n");
+	printf(" 2. Configurar métodos criptográficos  \n");
 	printf("***************************************\n\n");
 
     printf("Selecione uma opção: ");
@@ -97,7 +91,33 @@ int manager_menu() {
         opcao = 0;
     }
 
-    return opcao;
+    int metodo = 1;
+	switch (opcao) {
+        case 1:
+            clear_screen();
+            printf("Selecionou a encriptação por default = Generalised Caesar Cipher.\n");
+            scanf("Pressione Enter para continuar."); 
+            break;
+        
+        case 2:
+            clear_screen();
+            metodo = 0;
+            printf("Selecione o método criptográfico:\n");
+            printf("1. Generalised Caesar Cipher (default)\n");
+            printf("2. Vigenère cypher\n");
+            printf("Opção: ");
+            while (scanf(" %d", &metodo) != 1 || metodo < 1 || metodo > 2) {
+                printf("Opção inválida. Tente novamente\n\nSelecione uma opção: ");
+                int d;
+                while ((d = getchar()) != '\n' && d != EOF);
+                metodo = 0;
+            }
+            break;
+            
+        default:
+            break;
+	}
+    return metodo;
 }
 
 static void clear_screen(void){

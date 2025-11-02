@@ -27,7 +27,7 @@ struct DH_parameters {
     int key;
 };
 
-int metodo_global = 1; // default method
+int metodo_global = 1; // método default
 
 struct Packet {
     char message[BUFLEN];
@@ -125,9 +125,7 @@ int main(int argc, char *argv[]) {
 
     clear_screen();
 
-    printf("VPN Client: waiting for TCP and UDP messages\n\n");
-
-
+    printf("VPN Client ready: waiting for TCP and UDP messages\n\n");
 
     while(1) {
 
@@ -154,22 +152,26 @@ int main(int argc, char *argv[]) {
             
             buf[recv_len] = '\0';
 
-            if (strncmp(buf, "METODO: ", 8) == 0) {
+            if (strncmp(buf, "Method: ", 8) == 0) {
                 int metodo_recebido = atoi(buf + 8);
                 if (metodo_recebido == 1 || metodo_recebido == 2) {
                     metodo_global = metodo_recebido;
-                    printf("\nMétodo atualizado via manager: METODO=%d\n", metodo_global);
+                    printf("\nMétodo atualizado via manager: Método = %d\n", metodo_global);
                 } else {
-                    printf("\nMETODO invalido: %s\n", buf);
+                    printf("\nMétodo inválido: %s\n", buf);
                 }
                 continue;
             }
 
-            else{
+            else {
             
                 printf("\nReceived [ProgUDP1]: %s", buf);
-                printf("Using method: %d\n", metodo);
-                
+
+                if (metodo == 1)
+                    printf("A utilizar método Generalised Caesar Cipher\n");
+                else if (metodo == 2)
+                    printf("A utilizar método Vigenère cypher\n");
+
                 struct Packet p;
                 // encriptar mensagem + calcular hash
                 criptar(buf, dh.key, 1, metodo);
